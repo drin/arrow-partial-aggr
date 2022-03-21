@@ -3,6 +3,23 @@
 A repository to investigate partial aggregates using Aparche Arrow's compute API.
 
 
+# Source files
+
+The repository should be organized in a straightforward manner. All of the C++ source and header
+files are in `src`, test data and the pacman build file (`PKGBUILD`) are in `resources`, and all
+other files are in the root directory.
+
+## LFS
+
+The test data is in git LFS because I thought that may be convenient (apologies if it isn't). So,
+be sure to get the test data after checking out the repository:
+
+```bash
+# downloads the file data from LFS
+git lfs checkout "resources/E-GEOD-76312.48-2152.x565.feather"
+```
+
+
 # Compilation
 
 This repository uses [meson][web-meson] to compile. This is partially because I don't understand
