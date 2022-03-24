@@ -73,10 +73,92 @@ ReadIPCFile(const std::string& path_to_file) {
 }
 
 
+/**
+ * Compute partial aggregate from `src_table`, and then return the time to calculate
+ * the aggregate. Store the result in the shared_ptr pointed to by `aggr_result`.
+ */
+std::chrono::milliseconds
+AggrTable( shared_ptr<Table>  src_table
+          ,int64_t            col_startndx
+          // ,int64_t            vsplit_count
+          ,int64_t            col_limit
+          ,shared_ptr<Table> *aggr_result) {
+
+    Aggr    partial_aggr;
+    int64_t col_stopndx = 0;
+
+    if (col_limit > 0) {
+        col_stopndx = (
+            ((col_startndx + col_limit) < src_table->num_columns()) ?
+                  col_startndx + col_limit
+                : src_table->num_columns()
+        );
+    }
+
+    // Set incr and stop ndx only if we will do vertical partitioning
+    /*
+    int64_t col_incr    = 0;
+    if (vsplit_count > 1) {
+        // temporary variables
+        int64_t col_count = src_table->num_columns() - 1; // subtract 1 to omit pkey
+        int     extra_val = (col_count % vsplit_count) == 0 ? 0 : 1;
+
+        col_incr      = (col_count / vsplit_count) + extra_val;
+        col_stopndx   = col_startndx + col_incr;
+    }
+    */
+
+
+    // NOTE: we are *only* timing the computation on each slice
+    auto aggr_tstart = std::chrono::steady_clock::now();
+
+    /*
+    // start at 1, so that this loops (vsplit_count - 1) times
+    for (int64_t vsplit_ndx = 1; vsplit_ndx < vsplit_count; ++vsplit_ndx) {
+        partial_aggr.Accumulate(src_table, col_startndx, col_stopndx);
+
+        // stop ndx is exclusive, so we use it as the next start; then incr stop
+        col_startndx = col_stopndx;
+        col_stopndx  = col_stopndx + col_incr;
+    }
+    */
+
+    // does the remainder (last partition) or the whole thing (vsplit_count == 1)
+    partial_aggr.Accumulate(src_table, col_startndx, col_stopndx);
+
+    auto aggr_tstop  = std::chrono::steady_clock::now();
+
+    (*aggr_result) = partial_aggr.TakeResult();
+
+    return std::chrono::duration_cast<std::chrono::milliseconds>(aggr_tstop - aggr_tstart);
+}
+
+
+Result<shared_ptr<Table>>
+ReadBatchesFromTable(arrow::TableBatchReader &reader, size_t batch_count) {
+    std::vector<shared_ptr<RecordBatch>> batch_list;
+
+    shared_ptr<RecordBatch> curr_batch;
+    for (size_t batch_ndx = 0; batch_ndx < batch_count; ++batch_ndx) {
+        ARROW_RETURN_NOT_OK(reader.ReadNext(&curr_batch));
+        if (curr_batch == nullptr) { break; }
+
+        batch_list.push_back(curr_batch);
+    }
+
+    ARROW_ASSIGN_OR_RAISE(
+         auto table_chunk
+        ,Table::FromRecordBatches(batch_list)
+    );
+
+    return table_chunk->CombineChunks();
+}
+
+
 int main(int argc, char **argv) {
     // ----------
     // Process CLI args for convenience
-    if (argc != 3) {
+    if (argc < 3 or argc > 5) {
         // we need this to make it easier to run on various systems
         std::cerr << "Please provide the absolute path to the current directory" << std::endl;
         return 1;
@@ -84,13 +166,25 @@ int main(int argc, char **argv) {
 
     std::string work_dirpath     { argv[1] };
     std::string should_aggrtable { argv[2] };
+    size_t      batch_count      { 1       };
+    int64_t     col_limit        { 0       };
 
-    bool        aggr_table   { should_aggrtable == "table" };
-    std::string test_fpath   {
+    // used for vertical partitioning
+    // int64_t     vsplit_count     { 1       };
+
+    std::string test_fpath {
           "file://"
         + work_dirpath
-        + "/resources/E-GEOD-76312.48-2152.x565.feather"
+        // + "/resources/E-GEOD-76312.48-2152.x565.feather"
+        + "/resources/E-GEOD-76312.48-2152.x300.feather"
     };
+    bool aggr_table { should_aggrtable == "table" };
+
+    if (argc >= 4) { batch_count  = std::stoull(argv[3]); }
+    if (argc >= 5) {
+        // vsplit_count = std::stoll(argv[4]);
+        col_limit    = std::stoll(argv[4]);
+    }
 
     #if DEBUG != 0
         std::cout << "Using directory  [" << work_dirpath << "]" << std::endl;
@@ -149,63 +243,69 @@ int main(int argc, char **argv) {
 
     // >> The computation to be benchmarked
     std::chrono::milliseconds aggr_ttime { 0 };
+    int                       aggr_count { 0 };
+    shared_ptr<Table>         aggr_result;
 
     //  |> case for applying computation to whole table
     if (aggr_table) {
-        auto aggr_tstart = std::chrono::steady_clock::now();
+        // aggr_ttime += AggrTable(data_table, 1, vsplit_count, &aggr_result);
+        aggr_ttime += AggrTable(data_table, 1, col_limit, &aggr_result);
+        aggr_count  = 1;
 
-        Aggr partial_aggr;
-        partial_aggr.Accumulate(data_table, 1);
-        auto aggr_result = partial_aggr.TakeResult();
-
-        auto aggr_tstop  = std::chrono::steady_clock::now();
-        aggr_ttime += std::chrono::duration_cast<std::chrono::milliseconds>(
-            aggr_tstop - aggr_tstart
-        );
+        #if DEBUG == 0
+            std::cout <<         data_table->num_rows()
+                      << "," << ((col_limit > 0) ? col_limit : data_table->num_columns())
+            ;
+        #endif
     }
 
     //  |> case for applying computation to each table chunk (i.e. RecordBatch)
     else {
-        shared_ptr<RecordBatch>        table_batch;
         std::vector<shared_ptr<Table>> aggrs_by_slice;
-
         aggrs_by_slice.reserve(pkey_col->num_chunks());
 
-        size_t batch_ndx { 0 };
+        // Use `TableBatchReader` to grab chunks from the table
         auto   table_batcher = arrow::TableBatchReader(*data_table);
-        auto   read_status   = table_batcher.ReadNext(&table_batch);
-        while (read_status.ok() and table_batch != nullptr) {
-            // convert batch to a Table
-            auto convert_result = Table::FromRecordBatches({ table_batch });
-            if (not convert_result.ok()) {
-                std::cerr << "Error:"                                   << std::endl
-                          << "\t" << convert_result.status().ToString() << std::endl
+        auto   slice_result  = ReadBatchesFromTable(table_batcher, batch_count);
+
+        if (slice_result.ok()) {
+            #if DEBUG != 0
+                std::cout << "Row count for most slices: ["
+                          << (*slice_result)->num_rows()
+                          << "]"
+                          << std::endl
                 ;
 
-                return 2;
-            }
-            auto tslice = *convert_result;
+                std::cout << "Row count for final slice: ["
+                          << data_table->num_rows() % (*slice_result)->num_rows()
+                          << "]"
+                          << std::endl
+                ;
 
-            // Aggregate table
-            // NOTE: we are *only* timing the computation on each slice
-            auto aggr_tstart = std::chrono::steady_clock::now();
+            #else
+                std::cout << "\""
+                             << (*slice_result)->num_rows()
+                             << ":"
+                             << data_table->num_rows() % (*slice_result)->num_rows()
+                          << "\""
+                          << ","
+                          << ((col_limit > 0) ? col_limit : (*slice_result)->num_columns())
+                ;
 
-            Aggr partial_aggr;
-            partial_aggr.Accumulate(tslice, 1);
+            #endif
+        }
 
-            auto aggr_tstop  = std::chrono::steady_clock::now();
-
-            aggr_ttime += std::chrono::duration_cast<std::chrono::milliseconds>(
-                aggr_tstop - aggr_tstart
-            );
-
-            // Save aggr result
-            aggrs_by_slice.push_back(partial_aggr.TakeResult());
+        // Iterate over each chunk and time the aggregation
+        while (slice_result.ok()) {
+            // Aggregate table and save result
+            auto tslice = *slice_result;
+            // aggr_ttime  += AggrTable(tslice, 1, vsplit_count, &aggr_result);
+            aggr_ttime  += AggrTable(tslice, 1, col_limit, &aggr_result);
+            aggr_count  += 1;
+            aggrs_by_slice.push_back(aggr_result);
 
             // Read next batch
-            batch_ndx += 1;
-            // std::cout << "Reading next slice" << std::endl;
-            read_status = table_batcher.ReadNext(&table_batch);
+            slice_result = ReadBatchesFromTable(table_batcher, batch_count);
         }
 
         auto concat_result = arrow::ConcatenateTables(aggrs_by_slice);
@@ -216,6 +316,8 @@ int main(int argc, char **argv) {
 
             return 3;
         }
+
+        aggr_result = *concat_result;
     }
 
     #if DEBUG != 0
