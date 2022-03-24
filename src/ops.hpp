@@ -10,7 +10,9 @@ struct Aggr {
 
     shared_ptr<Table> TakeResult();
     Status            Initialize(shared_ptr<ChunkedArray> initial_vals);
-    Status            Accumulate(shared_ptr<Table> new_vals, int64_t col_startndx);
+    Status            Accumulate( shared_ptr<Table> new_vals
+                                 ,int64_t           col_startndx=1
+                                 ,int64_t           col_stopndx =0);
 };
 
 // just for readability here

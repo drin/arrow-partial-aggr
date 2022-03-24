@@ -166,20 +166,23 @@ Aggr::Initialize(shared_ptr<ChunkedArray> initial_vals) {
   *         return (count, mean, M2)
  */
 Status
-Aggr::Accumulate(shared_ptr<Table> new_vals, int64_t col_ndx) {
+Aggr::Accumulate(shared_ptr<Table> new_vals, int64_t col_startndx, int64_t col_stopndx) {
     shared_ptr<ChunkedArray> delta_mean;
     shared_ptr<ChunkedArray> delta_var;
 
     if (this->count == 0) {
         // std::cout << "Initializing new values..." << std::endl;
-        this->Initialize(new_vals->column(col_ndx));
+        this->Initialize(new_vals->column(col_startndx));
         this->count  = 1;
-        col_ndx     += 1;
+        col_startndx     += 1;
     }
 
-    for (; col_ndx < new_vals->num_columns(); col_ndx++) {
+    // if stop ndx is 0, then default to the last column
+    if (col_stopndx == 0) { col_stopndx = new_vals->num_columns(); }
+
+    for (; col_startndx < col_stopndx; ++col_startndx) {
         // use a result just to make call chains easier
-        auto col_vals = new_vals->column(col_ndx);
+        auto col_vals = new_vals->column(col_startndx);
 
         this->count += 1;
         delta_mean  = VecAbs(VecSub(col_vals, this->means));
