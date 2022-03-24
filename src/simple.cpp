@@ -1,18 +1,38 @@
+// ------------------------------
+// Dependencies
+
 #include <iostream>
 #include "simple.hpp"
 #include "ops.hpp"
 
+
+// ------------------------------
+// Macros and Aliases
+
+#define DEBUG 0
+
+
 using arrow::ipc::feather::Reader;
+
+
+// ------------------------------
+// Variables
 
 static std::string help_message {
     "simple <absolute path to current dir> <'table' | 'vector'>"
 };
 
 
+// ------------------------------
+// Functions
+
 // Result<shared_ptr<RecordBatchStreamReader>>
 Result<shared_ptr<Reader>>
 ReaderForIPCFile(const std::string &path_as_uri) {
-    std::cout << "Reading arrow IPC-formatted file: " << path_as_uri << std::endl;
+    #if DEBUG != 0
+        std::cout << "Reading arrow IPC-formatted file: " << path_as_uri << std::endl;
+    #endif
+
     std::string path_to_file;
 
     // get a `FileSystem` instance (local fs scheme is "file://")
@@ -36,7 +56,9 @@ ReaderForIPCFile(const std::string &path_as_uri) {
 
 Result<shared_ptr<Table>>
 ReadIPCFile(const std::string& path_to_file) {
-    std::cout << "Parsing file: '" << path_to_file << "'" << std::endl;
+    #if DEBUG != 0
+        std::cout << "Parsing file: '" << path_to_file << "'" << std::endl;
+    #endif
 
     // Declares and initializes `batch_reader`
     // ARROW_ASSIGN_OR_RAISE(auto batch_reader, ReaderForIPCFile(path_to_file));
@@ -70,8 +92,28 @@ int main(int argc, char **argv) {
         + "/resources/E-GEOD-76312.48-2152.x565.feather"
     };
 
-    std::cout << "Using directory  [" << work_dirpath << "]" << std::endl;
-    std::cout << "Aggregating over [" << (aggr_table ? "table" : "vector") << "]" << std::endl;
+    #if DEBUG != 0
+        std::cout << "Using directory  [" << work_dirpath << "]" << std::endl;
+        std::cout << "Aggregating over ["
+                  << (aggr_table ? "table" : "vector")
+                  << "]" << std::endl
+        ;
+
+        std::cout << "Batch count to concat [" << batch_count  << "]" << std::endl;
+        std::cout << "Column limit to aggr  [" << col_limit << "]" << std::endl;
+        // std::cout << "Number of vertical partitions [" << vsplit_count << "]" << std::endl;
+
+    /*
+    #else
+        std::cout <<         "\"row count[:tail row count]\""
+                  << "\t" << "\"col count\""
+                  << "\t" << "\"total aggr time\""
+                  << "\t" << "\"avg aggr time\""
+                  << std::endl
+        ;
+    */
+
+    #endif
 
 
     // ----------
@@ -90,15 +132,19 @@ int main(int argc, char **argv) {
     // Peek at the data
     auto data_table = *reader_result;
     auto pkey_col   = data_table->column(0);
-    std::cout << "Table dimensions ["
-              <<     data_table->num_rows() << ", " << data_table->num_columns()
-              << "]"
-              << std::endl
-              << "\t" << "[" << pkey_col->num_chunks()       << "] chunks"
-              << std::endl
-              << "\t" << "[" << pkey_col->chunk(0)->length() << "] chunk_size"
-              << std::endl
-    ;
+
+
+    #if DEBUG != 0
+        std::cout << "Table dimensions ["
+                  <<     data_table->num_rows() << ", " << data_table->num_columns()
+                  << "]"
+                  << std::endl
+                  << "\t" << "[" << pkey_col->num_chunks()       << "] chunks"
+                  << std::endl
+                  << "\t" << "[" << pkey_col->chunk(0)->length() << "] chunk_size"
+                  << std::endl
+        ;
+    #endif
 
 
     // >> The computation to be benchmarked
@@ -172,6 +218,19 @@ int main(int argc, char **argv) {
         }
     }
 
-    std::cout << "Aggr Time:\t" << aggr_ttime.count() << "ms" << std::endl;
+    #if DEBUG != 0
+        std::cout << "Aggr Time:"                                           << std::endl
+                  << "\tTotal: " << aggr_ttime.count()              << "ms" << std::endl
+                  << "\tAvg  : " << aggr_ttime.count() / aggr_count << "ms" << std::endl
+        ;
+
+    #else
+        std::cout << "," << "\"" << aggr_ttime.count()              << "ms" << "\""
+                  << "," << "\"" << aggr_ttime.count() / aggr_count << "ms" << "\""
+                  << std::endl
+        ;
+
+    #endif
+
     return 0;
 }
