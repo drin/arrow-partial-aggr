@@ -2,14 +2,14 @@ project(
      'arrow-partial-aggr'
     ,'cpp'
     ,version         : '0.1'
-    ,default_options : ['warning_level=3', 'cpp_std=c++14']
+    ,default_options : ['warning_level=3', 'cpp_std=c++17']
 )
 
 add_project_arguments('-DDEBUG=0', language: 'cpp')
 
 
 # >> Dependencies
-dep_arrow = dependency('arrow-dataset', version: '>=6.0.1', static: false)
+dep_arrow = dependency('arrow-dataset', version: '>=12.0.1', static: false)
 
 
 # >> Executables
