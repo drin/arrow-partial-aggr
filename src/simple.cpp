@@ -175,8 +175,8 @@ int main(int argc, char **argv) {
     std::string test_fpath {
           "file://"
         + work_dirpath
-        // + "/resources/E-GEOD-76312.48-2152.x565.feather"
-        + "/resources/E-GEOD-76312.48-2152.x300.feather"
+        + "/resources/E-GEOD-76312.48-2152.x565.feather"
+        //+ "/resources/E-GEOD-76312.48-2152.x300.feather"
     };
     bool aggr_table { should_aggrtable == "table" };
 
