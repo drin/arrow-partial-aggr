@@ -35,7 +35,7 @@ To actually build the code with meson, here are some simple bootstrap instructio
 
 ```bash
 # creates a directory, called `build-dir`
-meson build-dir
+meson setup build-dir
 
 # command to compile; the `-C` flag says to "change to the given directory and run the command"
 # I think this is essentially ninja syntax
